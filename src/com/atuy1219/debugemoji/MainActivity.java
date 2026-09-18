@@ -30,16 +30,34 @@ import android.text.Layout;
 import android.text.StaticLayout;
 import android.text.TextPaint;
 
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileReader;
 import java.io.OutputStream;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 public class MainActivity extends Activity {
     private static final String FLAGS = "JP=🇯🇵  US=🇺🇸  CN=🇨🇳  HK=🇭🇰  TW=🇹🇼";
     private static final String U17 = "U17=🫪 🫯 🫈 🛘 🫍 🪊 🪎";
+    private static final String[] TEST_TEXTS = {
+            "🇹🇼", "🇯🇵", "🇺🇸", "🇨🇳", "🇭🇰", "🇿🇿",
+            "🫪", "🫯", "🫈", "🛘", "🫍", "🪊", "🪎"
+    };
+    private static final String[] TEST_NAMES = {
+            "TW", "JP", "US", "CN", "HK", "ZZ",
+            "U17_1FAEA", "U17_1FAEF", "U17_1FAC8", "U17_1F6D8",
+            "U17_1FACD", "U17_1FA8A", "U17_1FA8E"
+    };
+
     private LinearLayout root;
     private TextView status;
+    private List<String> mappedEmojiFonts;
 
     private static int dp(Context c, int n) {
         return (int)(n * c.getResources().getDisplayMetrics().density + 0.5f);
@@ -65,6 +83,12 @@ public class MainActivity extends Activity {
         return v;
     }
 
+    private TextView directTextView(String text, Typeface tf) {
+        TextView v = plainTextView(text, true);
+        v.setTypeface(tf);
+        return v;
+    }
+
     private EditText editText(String text, boolean software) {
         EditText v = new EditText(this);
         v.setText(text);
@@ -87,21 +111,22 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        mappedEmojiFonts = findMappedEmojiFonts();
+
         ScrollView scroller = new ScrollView(this);
         scroller.setBackgroundColor(Color.rgb(18, 18, 18));
-
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(0, dp(this, 8), 0, dp(this, 32));
         scroller.addView(root);
         setContentView(scroller);
 
-        TextView title = plainTextView("Debug Emoji — Taiwan Text Path Probe", false);
+        TextView title = plainTextView("Debug Emoji — Font Path Probe v2", false);
         title.setTextSize(22);
         root.addView(title);
 
         TextView info = plainTextView(
-                "Pure Android framework probe — no AndroidX, Compose, GMS, EmojiCompat, WebView, or network.\n" +
+                "Pure Android framework probe — no AndroidX, Compose, GMS library, EmojiCompat, WebView, or network.\n" +
                 "Build=" + Build.FINGERPRINT + "\nAPI=" + Build.VERSION.SDK_INT, false);
         info.setTextSize(12);
         root.addView(info);
@@ -111,87 +136,183 @@ public class MainActivity extends Activity {
         addProbe("3. EditText — hardware/default", editText(FLAGS, false));
         addProbe("4. EditText — forced software layer", editText(FLAGS, true));
         addProbe("5. StaticLayout.draw(Canvas)", new StaticLayoutProbeView(this, FLAGS));
-        addProbe("6. Canvas.drawText()", new CanvasProbeView(this, FLAGS, false));
-        addProbe("7. Canvas.drawTextRun()", new CanvasProbeView(this, FLAGS, true));
+        addProbe("6. Canvas.drawText()", new CanvasProbeView(this, FLAGS, false, null));
+        addProbe("7. Canvas.drawTextRun()", new CanvasProbeView(this, FLAGS, true, null));
         addProbe("8. TextView — TW only", plainTextView("TW=[🇹🇼] <- brackets must contain a visible flag", false));
         addProbe("9. Unicode 17 — TextView", plainTextView(U17, false));
-        addProbe("10. Unicode 17 — Canvas.drawText()", new CanvasProbeView(this, U17, false));
+        addProbe("10. Unicode 17 — Canvas.drawText()", new CanvasProbeView(this, U17, false, null));
+
+        addDirectFontSection("/system/fonts/NotoColorEmoji.ttf");
+        addDirectFontSection("/system/fonts/NotoColorEmojiFlags.ttf");
+
+        for (String path : mappedEmojiFonts) {
+            if (!path.equals("/system/fonts/NotoColorEmoji.ttf") &&
+                !path.equals("/system/fonts/NotoColorEmojiFlags.ttf")) {
+                addDirectFontSection(path);
+            }
+        }
+
+        TextView maps = plainTextView("Mapped emoji/font files in this app process:\n" + joinLines(mappedEmojiFonts), false);
+        maps.setTextSize(11);
+        root.addView(maps);
 
         Button reportButton = new Button(this);
-        reportButton.setText("COPY REPORT TO CLIPBOARD");
+        reportButton.setText("COPY FULL REPORT TO CLIPBOARD");
         reportButton.setOnClickListener(v -> {
             String r = makeReport();
             ClipboardManager cm = (ClipboardManager)getSystemService(CLIPBOARD_SERVICE);
             cm.setPrimaryClip(ClipData.newPlainText("DebugEmoji", r));
-            status.setText("Report copied to clipboard.");
+            status.setText("Full report copied to clipboard.");
         });
         root.addView(reportButton);
 
         Button shotButton = new Button(this);
-        shotButton.setText("SAVE PIXELCOPY SCREENSHOT TO DOWNLOADS");
+        shotButton.setText("SAVE PIXELCOPY SCREENSHOT");
         shotButton.setOnClickListener(v -> savePixelCopy());
         root.addView(shotButton);
 
-        status = plainTextView("Compare rows visually. KernelSU Next can be used as the external Compose control.", false);
+        status = plainTextView(
+                "Key comparison: DEFAULT vs direct /system font vs mapped /data/fonts font.", false);
         status.setTextSize(13);
         root.addView(status);
     }
 
+    private void addDirectFontSection(String path) {
+        try {
+            File f = new File(path);
+            if (!f.isFile() || !f.canRead()) return;
+            Typeface tf = Typeface.createFromFile(f);
+            addProbe("DIRECT TextView: " + path, directTextView("TW=🇹🇼 JP=🇯🇵 U17=🫪", tf));
+            addProbe("DIRECT Canvas: " + path, new CanvasProbeView(this, "TW=🇹🇼 JP=🇯🇵 U17=🫪", false, tf));
+        } catch (Throwable t) {
+            TextView v = plainTextView("Failed: " + t.getClass().getSimpleName() + ": " + t.getMessage(), false);
+            v.setTextSize(12);
+            addProbe("DIRECT load failed: " + path, v);
+        }
+    }
+
+    private List<String> findMappedEmojiFonts() {
+        Set<String> out = new LinkedHashSet<>();
+        try (BufferedReader br = new BufferedReader(new FileReader("/proc/self/maps"))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                int slash = line.indexOf('/');
+                if (slash < 0) continue;
+                String path = line.substring(slash).trim();
+                String lower = path.toLowerCase(Locale.US);
+                if ((lower.contains("emoji") || lower.contains("/fonts/")) &&
+                    (lower.endsWith(".ttf") || lower.endsWith(".otf"))) {
+                    out.add(path);
+                }
+            }
+        } catch (Throwable ignored) {}
+        return new ArrayList<>(out);
+    }
+
+    private static String joinLines(List<String> paths) {
+        if (paths.isEmpty()) return "(none found)";
+        StringBuilder b = new StringBuilder();
+        for (String p : paths) b.append(p).append('\n');
+        return b.toString();
+    }
+
     private String makeReport() {
         StringBuilder b = new StringBuilder();
-        b.append("Debug-Emoji Taiwan Text Path Probe\n");
+        b.append("Debug-Emoji Font Path Probe v2\n");
         b.append("fingerprint=").append(Build.FINGERPRINT).append('\n');
         b.append("sdk=").append(Build.VERSION.SDK_INT).append('\n');
         b.append("release=").append(Build.VERSION.RELEASE).append('\n');
 
-        Paint[] paints = new Paint[] {
-                new Paint(),
-                paintWith(Typeface.DEFAULT),
-                paintWith(Typeface.SANS_SERIF),
-                paintWith(Typeface.MONOSPACE),
-                paintWith(Typeface.SERIF)
-        };
-        String[] names = new String[] {
-                "PaintDefault", "DEFAULT", "SANS_SERIF", "MONOSPACE", "SERIF"
-        };
-        String[] texts = new String[] {
-                "🇹🇼", "🇯🇵", "🇺🇸", "🇨🇳", "🇭🇰", "🇿🇿",
-                "🫪", "🫯", "🫈", "🛘", "🫍", "🪊", "🪎"
-        };
-        String[] tnames = new String[] {
-                "TW", "JP", "US", "CN", "HK", "ZZ",
-                "U17_1FAEA", "U17_1FAEF", "U17_1FAC8", "U17_1F6D8",
-                "U17_1FACD", "U17_1FA8A", "U17_1FA8E"
-        };
+        b.append("\n[MAPPED_FONT_PATHS]\n");
+        for (String p : mappedEmojiFonts) b.append(p).append('\n');
 
-        for (int i = 0; i < paints.length; i++) {
-            Paint p = paints[i];
-            p.setTextSize(64f);
-            b.append("\n[").append(names[i]).append("]\n");
-            for (int j = 0; j < texts.length; j++) {
-                boolean hg;
-                try { hg = p.hasGlyph(texts[j]); }
-                catch (Throwable t) { hg = false; }
-                b.append(tnames[j])
-                 .append(" hasGlyph=").append(hg)
-                 .append(" width=").append(p.measureText(texts[j]))
-                 .append('\n');
+        appendPaintReport(b, "PaintDefault", new Paint(Paint.ANTI_ALIAS_FLAG));
+        appendPaintReport(b, "DEFAULT", paintWith(Typeface.DEFAULT));
+        appendPaintReport(b, "SANS_SERIF", paintWith(Typeface.SANS_SERIF));
+        appendPaintReport(b, "MONOSPACE", paintWith(Typeface.MONOSPACE));
+        appendPaintReport(b, "SERIF", paintWith(Typeface.SERIF));
+
+        appendDirectFileReport(b, "/system/fonts/NotoColorEmoji.ttf");
+        appendDirectFileReport(b, "/system/fonts/NotoColorEmojiFlags.ttf");
+        for (String p : mappedEmojiFonts) {
+            if (!p.equals("/system/fonts/NotoColorEmoji.ttf") &&
+                !p.equals("/system/fonts/NotoColorEmojiFlags.ttf")) {
+                appendDirectFileReport(b, p);
             }
         }
 
-        b.append("\nWidget facts:\n");
-        b.append("TextView/EditText retain literal Unicode; this app performs no filtering.\n");
-        b.append("Canvas rows bypass TextView/EditText widgets.\n");
-        b.append("StaticLayout exercises Android text Layout without TextView.\n");
-        b.append("Forced-software rows distinguish software from hardware-layer rendering.\n");
-        b.append("No external libraries or network access.\n");
+        b.append("\nInterpretation:\n");
+        b.append("hasGlyph=true + pixels=0 => accepted glyph/run with advance but no painted pixels in this app process.\n");
+        b.append("DEFAULT pixels=0 but DIRECT /system pixels>0 => app-visible font-map/fallback differs from raw system font.\n");
+        b.append("A mapped /data/fonts file reproducing pixels=0 directly identifies that font as the blank-glyph source.\n");
         return b.toString();
+    }
+
+    private void appendPaintReport(StringBuilder b, String name, Paint p) {
+        p.setTextSize(64f);
+        b.append("\n[").append(name).append("]\n");
+        for (int j = 0; j < TEST_TEXTS.length; j++) {
+            boolean hg;
+            try { hg = p.hasGlyph(TEST_TEXTS[j]); }
+            catch (Throwable t) { hg = false; }
+            int pixels = countPixels(p.getTypeface(), TEST_TEXTS[j]);
+            b.append(TEST_NAMES[j])
+             .append(" hasGlyph=").append(hg)
+             .append(" width=").append(p.measureText(TEST_TEXTS[j]))
+             .append(" pixels=").append(pixels)
+             .append('\n');
+        }
+    }
+
+    private void appendDirectFileReport(StringBuilder b, String path) {
+        b.append("\n[DIRECT:").append(path).append("]\n");
+        try {
+            File f = new File(path);
+            b.append("exists=").append(f.exists())
+             .append(" readable=").append(f.canRead())
+             .append(" size=").append(f.exists() ? f.length() : -1)
+             .append('\n');
+            if (!f.isFile() || !f.canRead()) return;
+            Typeface tf = Typeface.createFromFile(f);
+            Paint p = paintWith(tf);
+            p.setTextSize(64f);
+            for (int j = 0; j < TEST_TEXTS.length; j++) {
+                boolean hg;
+                try { hg = p.hasGlyph(TEST_TEXTS[j]); }
+                catch (Throwable t) { hg = false; }
+                b.append(TEST_NAMES[j])
+                 .append(" hasGlyph=").append(hg)
+                 .append(" width=").append(p.measureText(TEST_TEXTS[j]))
+                 .append(" pixels=").append(countPixels(tf, TEST_TEXTS[j]))
+                 .append('\n');
+            }
+        } catch (Throwable t) {
+            b.append("ERROR=").append(t.getClass().getName()).append(": ")
+             .append(t.getMessage()).append('\n');
+        }
     }
 
     private Paint paintWith(Typeface tf) {
         Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
         p.setTypeface(tf);
         return p;
+    }
+
+    private int countPixels(Typeface tf, String text) {
+        Bitmap bm = Bitmap.createBitmap(256, 192, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bm);
+        c.drawColor(Color.TRANSPARENT, android.graphics.PorterDuff.Mode.CLEAR);
+        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        p.setColor(Color.WHITE);
+        p.setTextSize(128f);
+        if (tf != null) p.setTypeface(tf);
+        c.drawText(text, 24f, 144f, p);
+        int[] px = new int[256 * 192];
+        bm.getPixels(px, 0, 256, 0, 0, 256, 192);
+        int n = 0;
+        for (int v : px) if (((v >>> 24) & 0xff) != 0) n++;
+        bm.recycle();
+        return n;
     }
 
     private void savePixelCopy() {
@@ -216,13 +337,12 @@ public class MainActivity extends Activity {
                 cv.put(MediaStore.Images.Media.DISPLAY_NAME, "DebugEmoji_" + stamp + ".png");
                 cv.put(MediaStore.Images.Media.MIME_TYPE, "image/png");
                 if (Build.VERSION.SDK_INT >= 29) {
-                    cv.put(MediaStore.Images.Media.RELATIVE_PATH, "Download/Debug-Emoji");
+                    cv.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Debug-Emoji");
                     cv.put(MediaStore.Images.Media.IS_PENDING, 1);
                 }
 
                 Uri uri = getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv);
                 if (uri == null) throw new RuntimeException("MediaStore insert returned null");
-
                 try (OutputStream os = getContentResolver().openOutputStream(uri)) {
                     if (os == null) throw new RuntimeException("openOutputStream returned null");
                     bitmap.compress(Bitmap.CompressFormat.PNG, 100, os);
@@ -246,12 +366,13 @@ public class MainActivity extends Activity {
         private final String text;
         private final boolean run;
 
-        public CanvasProbeView(Context context, String text, boolean run) {
+        public CanvasProbeView(Context context, String text, boolean run, Typeface tf) {
             super(context);
             this.text = text;
             this.run = run;
             paint.setColor(Color.WHITE);
             paint.setTextSize(64f);
+            if (tf != null) paint.setTypeface(tf);
             setBackgroundColor(Color.rgb(18, 18, 18));
             setLayerType(View.LAYER_TYPE_SOFTWARE, null);
         }
