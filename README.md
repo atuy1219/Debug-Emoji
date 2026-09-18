@@ -39,3 +39,4 @@ Requirements for local Linux builds:
 ## Package
 
 `com.atuy1219.debugemoji`
+
