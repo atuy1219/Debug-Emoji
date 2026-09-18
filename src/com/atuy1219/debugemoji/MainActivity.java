@@ -32,9 +32,12 @@ import android.text.TextPaint;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileReader;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.text.SimpleDateFormat;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.LinkedHashSet;
@@ -171,6 +174,11 @@ public class MainActivity extends Activity {
         shotButton.setOnClickListener(v -> savePixelCopy());
         root.addView(shotButton);
 
+        Button exportButton = new Button(this);
+        exportButton.setText("EXPORT STOCK EMOJI FONTS + REPORT");
+        exportButton.setOnClickListener(v -> exportStockFontsAndReport());
+        root.addView(exportButton);
+
         status = plainTextView(
                 "Key comparison: DEFAULT vs direct /system font vs mapped /data/fonts font.", false);
         status.setTextSize(13);
@@ -234,6 +242,10 @@ public class MainActivity extends Activity {
 
         appendDirectFileReport(b, "/system/fonts/NotoColorEmoji.ttf");
         appendDirectFileReport(b, "/system/fonts/NotoColorEmojiFlags.ttf");
+
+        b.append("\n[STOCK_EMOJI_FONT_HASHES]\n");
+        appendFileHash(b, "/system/fonts/NotoColorEmoji.ttf");
+        appendFileHash(b, "/system/fonts/NotoColorEmojiFlags.ttf");
         for (String p : mappedEmojiFonts) {
             if (!p.equals("/system/fonts/NotoColorEmoji.ttf") &&
                 !p.equals("/system/fonts/NotoColorEmojiFlags.ttf")) {
@@ -313,6 +325,105 @@ public class MainActivity extends Activity {
         for (int v : px) if (((v >>> 24) & 0xff) != 0) n++;
         bm.recycle();
         return n;
+    }
+
+    private void appendFileHash(StringBuilder b, String path) {
+        try {
+            File f = new File(path);
+            b.append(path)
+             .append(" size=").append(f.exists() ? f.length() : -1)
+             .append(" sha256=").append(f.isFile() && f.canRead() ? sha256File(f) : "(unreadable)")
+             .append('\n');
+        } catch (Throwable t) {
+            b.append(path).append(" hash_error=")
+             .append(t.getClass().getSimpleName()).append(": ")
+             .append(t.getMessage()).append('\n');
+        }
+    }
+
+    private String sha256File(File file) throws Exception {
+        MessageDigest md = MessageDigest.getInstance("SHA-256");
+        byte[] buf = new byte[1024 * 1024];
+        try (InputStream in = new FileInputStream(file)) {
+            int n;
+            while ((n = in.read(buf)) > 0) md.update(buf, 0, n);
+        }
+        byte[] d = md.digest();
+        StringBuilder b = new StringBuilder();
+        for (byte x : d) b.append(String.format(Locale.US, "%02x", x & 0xff));
+        return b.toString();
+    }
+
+    private Uri writeDownloadFile(String displayName, String mimeType, InputStream source) throws Exception {
+        ContentValues cv = new ContentValues();
+        cv.put(MediaStore.Downloads.DISPLAY_NAME, displayName);
+        cv.put(MediaStore.Downloads.MIME_TYPE, mimeType);
+        if (Build.VERSION.SDK_INT >= 29) {
+            cv.put(MediaStore.Downloads.RELATIVE_PATH, "Download/Debug-Emoji");
+            cv.put(MediaStore.Downloads.IS_PENDING, 1);
+        }
+
+        Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+        if (uri == null) throw new RuntimeException("MediaStore Downloads insert returned null");
+
+        try (OutputStream out = getContentResolver().openOutputStream(uri)) {
+            if (out == null) throw new RuntimeException("openOutputStream returned null");
+            byte[] buf = new byte[1024 * 1024];
+            int n;
+            while ((n = source.read(buf)) > 0) out.write(buf, 0, n);
+        }
+
+        if (Build.VERSION.SDK_INT >= 29) {
+            ContentValues done = new ContentValues();
+            done.put(MediaStore.Downloads.IS_PENDING, 0);
+            getContentResolver().update(uri, done, null, null);
+        }
+        return uri;
+    }
+
+    private Uri exportFile(File source, String outName, String mimeType) throws Exception {
+        try (InputStream in = new FileInputStream(source)) {
+            return writeDownloadFile(outName, mimeType, in);
+        }
+    }
+
+    private Uri exportText(String text, String outName) throws Exception {
+        byte[] bytes = text.getBytes("UTF-8");
+        InputStream in = new java.io.ByteArrayInputStream(bytes);
+        try {
+            return writeDownloadFile(outName, "text/plain", in);
+        } finally {
+            in.close();
+        }
+    }
+
+    private void exportStockFontsAndReport() {
+        try {
+            File main = new File("/system/fonts/NotoColorEmoji.ttf");
+            File flags = new File("/system/fonts/NotoColorEmojiFlags.ttf");
+            if (!main.isFile() || !main.canRead()) {
+                throw new RuntimeException("Cannot read " + main.getAbsolutePath());
+            }
+            if (!flags.isFile() || !flags.canRead()) {
+                throw new RuntimeException("Cannot read " + flags.getAbsolutePath());
+            }
+
+            String mainSha = sha256File(main);
+            String flagsSha = sha256File(flags);
+
+            Uri mainUri = exportFile(main, "stock-NotoColorEmoji.ttf", "font/ttf");
+            Uri flagsUri = exportFile(flags, "stock-NotoColorEmojiFlags.ttf", "font/ttf");
+            Uri reportUri = exportText(makeReport(), "Debug-Emoji-report.txt");
+
+            status.setText(
+                    "Exported to Download/Debug-Emoji\n" +
+                    "stock-NotoColorEmoji.ttf\nSHA256=" + mainSha + "\n" +
+                    "stock-NotoColorEmojiFlags.ttf\nSHA256=" + flagsSha + "\n" +
+                    "report=" + reportUri + "\n" +
+                    "main=" + mainUri + "\nflags=" + flagsUri);
+        } catch (Throwable t) {
+            status.setText("Export failed: " + t.getClass().getSimpleName() + ": " + t.getMessage());
+        }
     }
 
     private void savePixelCopy() {
