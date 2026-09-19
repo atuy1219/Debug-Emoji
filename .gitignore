@@ -1,4 +1,4 @@
 build/
-*.apk
-*.jks
-*.keystore
+*.zip
+module/system/fonts/*.ttf
+!module/system/fonts/.gitkeep

@@ -1,0 +1,6 @@
+id=oneplus13_emoji_fix_2051_pua
+name=OnePlus 13 Noto Emoji Mount Fix
+version=2.4.0
+versionCode=240
+author=atuy1219
+description=KernelSU Nextのmetamodule経由で/system/fontsをsystemless置換し、Noto Emoji 2.051を通常アプリへ適用します。手動bind mountは使用しません。

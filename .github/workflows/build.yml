@@ -1,9 +1,15 @@
-name: Build APK
+name: Build module
 
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "module/**"
+      - "scripts/**"
+      - ".github/workflows/build.yml"
+      - "UPSTREAM.md"
 
 permissions:
   contents: read
@@ -11,48 +17,26 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
-      - name: Set up JDK 21
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "21"
-
-      - name: Install Android 36 SDK
+      - name: Build module ZIP
         shell: bash
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
-          SDKMANAGER="$(command -v sdkmanager || true)"
-          if [ -z "$SDKMANAGER" ]; then
-            SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          fi
-          "$SDKMANAGER" --version
-          yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
+          chmod +x scripts/build-module.sh
+          ./scripts/build-module.sh
 
-      - name: Build signed debug APK
+      - name: Show output
         shell: bash
         run: |
-          chmod +x ./build.sh
-          ./build.sh build
-          cp build/Debug-Emoji.apk Debug-Emoji.apk
+          ls -lh build/*.zip
+          sha256sum build/*.zip
 
-      - name: APK info
-        shell: bash
-        run: |
-          sha256sum Debug-Emoji.apk
-          ls -lh Debug-Emoji.apk
-
-      - name: Upload APK artifact
+      - name: Upload module
         uses: actions/upload-artifact@v4
         with:
-          name: Debug-Emoji-apk
-          path: Debug-Emoji.apk
+          name: OnePlus13-NotoEmoji-MountFix
+          path: build/*.zip
           if-no-files-found: error
-          retention-days: 30
